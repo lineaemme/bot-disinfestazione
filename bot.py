@@ -9,11 +9,11 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 import io
 import json
-import asyncio
-from aiohttp import web
 import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import time
 
-# Setup logging semplificato
+# Setup logging
 logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s',
     level=logging.INFO
@@ -71,6 +71,50 @@ gc, drive_service = setup_google_services()
 
 # Dizionario per memorizzare i dati della sessione utente
 user_data = {}
+
+# Server web semplice
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        
+        response = """
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Bot Disinfestazione</title>
+            <meta charset="utf-8">
+        </head>
+        <body>
+            <h1>🦟 Bot Disinfestazione</h1>
+            <p>✅ Bot funzionante!</p>
+            <p>🤖 Stato: Online</p>
+            <p>📊 Google Sheets: {}</p>
+            <p>📁 Google Drive: {}</p>
+            <p>⏰ Ultimo check: {}</p>
+        </body>
+        </html>
+        """.format(
+            '✅' if gc else '❌',
+            '✅' if drive_service else '❌',
+            datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+        )
+        
+        self.wfile.write(response.encode())
+    
+    def log_message(self, format, *args):
+        # Silenzia i log del server web
+        pass
+
+def start_web_server():
+    """Avvia server web in background"""
+    try:
+        server = HTTPServer(('0.0.0.0', PORT), HealthHandler)
+        print(f"🌐 Server web avviato sulla porta {PORT}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"❌ Errore server web: {e}")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inizia la conversazione"""
@@ -294,22 +338,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     
     return ConversationHandler.END
 
-# Server web per soddisfare Render
-async def health_check(request):
-    return web.Response(text="Bot funzionante!")
-
-async def start_web_server():
-    """Avvia il server web per Render"""
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    app.router.add_get('/health', health_check)
-    
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
-    await site.start()
-    print(f"🌐 Server web avviato sulla porta {PORT}")
-
 def main():
     """Avvia il bot"""
     if not TOKEN:
@@ -319,7 +347,14 @@ def main():
     try:
         print("🚀 Inizializzazione bot...")
         
-        # Crea l'applicazione
+        # Avvia server web in background
+        web_thread = threading.Thread(target=start_web_server, daemon=True)
+        web_thread.start()
+        
+        # Aspetta un po' per far partire il server
+        time.sleep(2)
+        
+        # Crea l'applicazione Telegram
         application = Application.builder().token(TOKEN).build()
         
         # Conversation handler
@@ -340,17 +375,14 @@ def main():
         application.add_handler(conv_handler)
         
         print("🤖 Bot configurato!")
-        print("📊 Configurazione:")
+        print("📊 Stato servizi:")
         print(f"  - Google Sheets: {'✅' if gc else '❌'}")
         print(f"  - Google Drive: {'✅' if drive_service else '❌'}")
+        print(f"  - Server Web: ✅ Port {PORT}")
         
-        # Avvia il server web in background
-        async def run_all():
-            await start_web_server()
-            await application.run_polling()
-        
-        # Esegui tutto insieme
-        asyncio.run(run_all())
+        # Avvia il bot con polling
+        print("🎯 Bot avviato e in ascolto...")
+        application.run_polling(drop_pending_updates=True)
         
     except Exception as e:
         print(f"❌ Errore critico: {e}")
